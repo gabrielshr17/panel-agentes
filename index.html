@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Panel de agentes</title>
+<style>
+:root {
+  --fondo: #f4f5f7; --superficie: #ffffff; --borde: #dfe2e7; --texto: #16191f; --suave: #5b6372;
+  --acento: #1d4ed8; --ok: #15803d; --pausa: #b45309; --error: #b91c1c; --codigo: #eef0f4;
+  --esp-1: 4px; --esp-2: 8px; --esp-3: 16px; --esp-4: 24px; --radio: 8px;
+  --mono: ui-monospace, "Cascadia Mono", Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) {
+  :root { --fondo: #0f1115; --superficie: #171a21; --borde: #2a2f3a; --texto: #e6e8ec; --suave: #98a1b2;
+    --acento: #7aa2ff; --ok: #4ade80; --pausa: #fbbf24; --error: #f87171; --codigo: #1f232c; }
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--fondo); color: var(--texto); font: 15px/1.45 system-ui, "Segoe UI", sans-serif; }
+header { position: sticky; top: 0; z-index: 2; background: var(--fondo); border-bottom: 1px solid var(--borde);
+  padding: var(--esp-2) var(--esp-3); display: flex; gap: var(--esp-3); align-items: baseline; flex-wrap: wrap; }
+h1 { font-size: 17px; margin: 0; }
+.resumen { color: var(--suave); font-size: 13px; }
+main { padding: var(--esp-3); display: grid; gap: var(--esp-3); grid-template-columns: 1fr; }
+@media (min-width: 900px) { main { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (min-width: 1500px) { main { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+.tarjeta { background: var(--superficie); border: 1px solid var(--borde); border-radius: var(--radio); display: flex; flex-direction: column; min-width: 0; }
+.cabeza { padding: var(--esp-3); border-bottom: 1px solid var(--borde); display: grid; gap: var(--esp-1); }
+.fila { display: flex; gap: var(--esp-2); align-items: center; flex-wrap: wrap; }
+.nombre { font-weight: 650; font-size: 16px; }
+.modelo { color: var(--suave); font-size: 13px; }
+.estado { font-size: 12px; font-weight: 600; padding: 2px var(--esp-2); border-radius: 999px; border: 1px solid currentColor; }
+.estado.trabajando { color: var(--ok); } .estado.pausa { color: var(--pausa); } .estado.terminado { color: var(--acento); } .estado.inicio { color: var(--suave); }
+.punto { width: 8px; height: 8px; border-radius: 50%; background: currentColor; display: inline-block; margin-right: var(--esp-1); }
+.trabajando .punto { animation: latido 1.2s infinite; }
+@keyframes latido { 50% { opacity: .25; } }
+@media (prefers-reduced-motion: reduce) { .trabajando .punto { animation: none; } }
+.meta { color: var(--suave); font-size: 12px; font-family: var(--mono); }
+.eventos { list-style: none; margin: 0; padding: var(--esp-2) var(--esp-3); max-height: 340px; overflow-y: auto; display: grid; gap: var(--esp-1); }
+.eventos li { font-size: 13px; display: grid; grid-template-columns: 58px 1fr; gap: var(--esp-2); }
+.eventos time { color: var(--suave); font-family: var(--mono); font-size: 11px; padding-top: 2px; }
+.eventos .herramienta span { font-family: var(--mono); font-size: 12px; color: var(--suave); overflow-wrap: anywhere; }
+.eventos .error span { color: var(--error); font-family: var(--mono); font-size: 12px; overflow-wrap: anywhere; }
+.eventos .texto span { white-space: pre-wrap; overflow-wrap: anywhere; }
+.vacio { color: var(--suave); font-size: 13px; padding: var(--esp-3); }
+details { border-top: 1px solid var(--borde); }
+summary { cursor: pointer; padding: var(--esp-2) var(--esp-3); font-size: 13px; font-weight: 600; min-height: 44px; display: flex; align-items: center; }
+summary:focus-visible { outline: 2px solid var(--acento); outline-offset: -2px; }
+pre { margin: 0; padding: var(--esp-2) var(--esp-3) var(--esp-3); background: var(--codigo); font: 12px/1.4 var(--mono); white-space: pre-wrap; overflow-wrap: anywhere; max-height: 320px; overflow-y: auto; }
+.aviso { margin: var(--esp-3); padding: var(--esp-2) var(--esp-3); border: 1px solid var(--error); color: var(--error); border-radius: var(--radio); font-size: 13px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Agentes del modo fácil</h1>
+  <span class="resumen" id="resumen">Cargando…</span>
+</header>
+<div id="aviso" hidden class="aviso" role="alert"></div>
+<main id="lista" aria-live="polite"></main>
+<script>
+const ETIQUETA = { trabajando: ["trabajando", "Trabajando"], "en pausa": ["pausa", "Sin actividad reciente"], terminado: ["terminado", "Terminado"], "sin iniciar": ["inicio", "Sin iniciar"] };
+const abiertos = new Set();
+const scrollFijo = new Map();
+
+function hora(ms) { return ms ? new Date(ms).toLocaleTimeString("es-DO", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false }) : ""; }
+function hace(ms, ahora) {
+  if (!ms) return "sin actividad";
+  const s = Math.max(0, Math.round((ahora - ms) / 1000));
+  return s < 60 ? `hace ${s} s` : `hace ${Math.round(s / 60)} min`;
+}
+function el(tag, attrs = {}, ...hijos) {
+  const n = document.createElement(tag);
+  for (const [k, v] of Object.entries(attrs)) {
+    if (k === "class") n.className = v; else if (k === "text") n.textContent = v; else n.setAttribute(k, v);
+  }
+  for (const h of hijos) if (h) n.append(h);
+  return n;
+}
+function seccion(id, titulo, contenido) {
+  const d = el("details", { "data-id": id });
+  if (abiertos.has(id)) d.open = true;
+  d.addEventListener("toggle", () => d.open ? abiertos.add(id) : abiertos.delete(id));
+  d.append(el("summary", { text: titulo }), el("pre", { text: contenido }));
+  return d;
+}
+function tarjeta(a, ahora) {
+  const [clase, texto] = ETIQUETA[a.estado] ?? ["inicio", a.estado];
+  const estado = el("span", { class: `estado ${clase}` }, el("span", { class: "punto", "aria-hidden": "true" }), texto);
+  const cabeza = el("div", { class: "cabeza" },
+    el("div", { class: "fila" }, el("span", { class: "nombre", text: a.nombre }), estado),
+    el("div", { class: "modelo", text: a.modelo }),
+    el("div", { class: "meta", text: `${a.rama} · ${a.commits.length} commit(s) · ${hace(a.ultimaActividad, ahora)}${a.tokens ? ` · ${a.tokens.toLocaleString("es-DO")} tokens de salida` : ""}` }));
+  const lista = el("ol", { class: "eventos", "data-id": a.id });
+  if (a.eventos.length === 0) lista.append(el("li", { class: "vacio", text: "Aún no hay actividad registrada." }));
+  for (const e of a.eventos) lista.append(el("li", { class: e.tipo }, el("time", { text: hora(e.hora) }), el("span", { text: e.texto })));
+  const t = el("article", { class: "tarjeta" }, cabeza, lista);
+  t.append(seccion(`${a.id}-commits`, `Commits (${a.commits.length})`, a.commits.join("\n") || "Sin commits todavía."));
+  t.append(seccion(`${a.id}-cambios`, "Archivos cambiados sin commit", a.cambios || "Ninguno."));
+  if (a.reporteTexto) t.append(seccion(`${a.id}-reporte`, "Reporte final", a.reporteTexto));
+  return t;
+}
+async function refrescar() {
+  const aviso = document.getElementById("aviso");
+  try {
+    const r = await fetch("estado.json?t=" + Date.now(), { cache: "no-store" });
+    if (!r.ok) throw new Error(`El servidor respondió ${r.status}`);
+    const datos = await r.json();
+    const main = document.getElementById("lista");
+    for (const ol of main.querySelectorAll("ol.eventos")) {
+      scrollFijo.set(ol.dataset.id, ol.scrollHeight - ol.scrollTop - ol.clientHeight < 24 ? null : ol.scrollTop);
+    }
+    main.replaceChildren(...datos.agentes.map((a) => tarjeta(a, datos.ahora)));
+    for (const ol of main.querySelectorAll("ol.eventos")) {
+      const fijo = scrollFijo.get(ol.dataset.id);
+      ol.scrollTop = fijo == null ? ol.scrollHeight : fijo;
+    }
+    const cuenta = (e) => datos.agentes.filter((a) => a.estado === e).length;
+    document.getElementById("resumen").textContent = `${cuenta("trabajando")} trabajando · ${cuenta("en pausa")} en pausa · ${cuenta("terminado")} terminados · actualizado ${hora(datos.ahora)}`;
+    aviso.hidden = true;
+  } catch (e) {
+    aviso.hidden = false;
+    aviso.textContent = `No se pudo leer el estado: ${e.message}. Reintentando…`;
+  }
+}
+refrescar();
+setInterval(refrescar, 3000);
+</script>
+</body>
+</html>
